@@ -7,7 +7,10 @@ import {
   toggleLikeVideo, 
   toggleDislikeVideo, 
   toggleWatchLater, 
-  logHistory 
+  logHistory,
+  getSyncedDownloads,
+  syncDownload,
+  unsyncDownload
 } from '../controllers/videoController.js';
 import { protect } from '../middlewares/auth.js';
 
@@ -15,6 +18,9 @@ const router = express.Router();
 
 router.get('/', getHomeFeed);
 router.get('/search', searchVideos);
+router.get('/downloads', protect, getSyncedDownloads);
+router.post('/downloads', protect, syncDownload);
+router.delete('/downloads/:id', protect, unsyncDownload);
 router.get('/:id', getVideoById);
 router.post('/', protect, createVideo);
 router.post('/:id/like', protect, toggleLikeVideo);

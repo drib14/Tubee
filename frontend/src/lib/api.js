@@ -76,6 +76,9 @@ export const videoAPI = {
   toggleDislike: (id) => api.post(`/videos/${id}/dislike`),
   toggleWatchLater: (id) => api.post(`/videos/${id}/watch-later`),
   logHistory: (videoId, progress) => api.post('/videos/history', { videoId, progress }),
+  getSyncedDownloads: () => api.get('/videos/downloads'),
+  syncDownload: (videoId) => api.post('/videos/downloads', { videoId }),
+  unsyncDownload: (id) => api.delete(`/videos/downloads/${id}`),
 };
 
 // Channel Endpoints
@@ -84,6 +87,7 @@ export const channelAPI = {
   get: (idOrHandle) => api.get(`/channels/${idOrHandle}`),
   update: (channelData) => api.put('/channels', channelData),
   subscribe: (channelId) => api.post(`/channels/${channelId}/subscribe`),
+  getTrending: () => api.get('/channels/trending'),
 };
 
 // Comment Endpoints

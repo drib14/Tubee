@@ -15,6 +15,7 @@ const userSchema = new mongoose.Schema({
   watchLater: [{ type: String }], // Array of videoId strings
   likedVideos: [{ type: String }],
   dislikedVideos: [{ type: String }],
+  downloads: [{ type: String }], // Synced offline download videoIds
   history: [historySchema]
 }, { timestamps: true });
 

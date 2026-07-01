@@ -18,6 +18,7 @@ import CreateChannel from './pages/CreateChannel';
 import ChannelPage from './pages/ChannelPage';
 import UploadVideo from './pages/UploadVideo';
 import PaymentSuccess from './pages/PaymentSuccess';
+import LibraryPage from './pages/LibraryPage';
 
 const Layout = () => {
   const { isOfflineMode } = useAuth();
@@ -45,6 +46,8 @@ const Layout = () => {
           <Route path="/watch/:id" element={<VideoPage />} />
           <Route path="/search" element={<SearchPage />} />
           <Route path="/downloads" element={<DownloadsPage />} />
+          <Route path="/library" element={<LibraryPage />} />
+          <Route path="/liked-videos" element={<LibraryPage />} />
           <Route path="/channel/create" element={<CreateChannel />} />
           <Route path="/channel/:id" element={<ChannelPage />} />
           <Route path="/upload" element={<UploadVideo />} />

@@ -1,10 +1,11 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { ThumbsUp, ThumbsDown, Clock, Download, Check, Sparkles, Send, Share2, MapPin, Coffee, X } from 'lucide-react';
+import { ThumbsUp, ThumbsDown, Clock, Download, Check, Send, MapPin, Coffee, X, ChevronDown, ChevronUp } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { videoAPI, channelAPI, commentAPI, paymentAPI } from '../lib/api';
 import { offlineDb } from '../lib/offlineDb';
 import UnifiedPlayer from '../components/UnifiedPlayer';
+import CustomModal from '../components/CustomModal';
 
 const VideoPage = () => {
   const { id } = useParams();
@@ -20,19 +21,62 @@ const VideoPage = () => {
   const [inWatchLater, setInWatchLater] = useState(false);
   const [isSubscribed, setIsSubscribed] = useState(false);
   
-  // Download State
+  // Download states
   const [isDownloaded, setIsDownloaded] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [downloading, setDownloading] = useState(false);
   const [offlineBlobUrl, setOfflineBlobUrl] = useState(null);
 
-  // Queue State
+  // Queue state
   const [queue, setQueue] = useState([]);
   const [theaterMode, setTheaterMode] = useState(false);
   
+  // Collapsable panel states (collapsed by default)
+  const [isDescCollapsed, setIsDescCollapsed] = useState(true);
+  const [isCommentsCollapsed, setIsCommentsCollapsed] = useState(true);
+
   // Paymongo Modal
   const [showSupportModal, setShowSupportModal] = useState(false);
   const [supportAmount, setSupportAmount] = useState('100'); // PHP 100 default
+
+  // Custom Modal Alerts states
+  const [customModal, setCustomModal] = useState({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: () => {},
+    onCancel: () => {},
+    confirmText: 'Confirm',
+    cancelText: 'Cancel',
+    isAlert: false
+  });
+
+  const showCustomAlert = (title, message) => {
+    setCustomModal({
+      isOpen: true,
+      title,
+      message,
+      confirmText: 'OK',
+      isAlert: true,
+      onConfirm: () => setCustomModal(prev => ({ ...prev, isOpen: false }))
+    });
+  };
+
+  const showCustomConfirm = (title, message, onConfirm) => {
+    setCustomModal({
+      isOpen: true,
+      title,
+      message,
+      confirmText: 'Confirm',
+      cancelText: 'Cancel',
+      isAlert: false,
+      onConfirm: () => {
+        onConfirm();
+        setCustomModal(prev => ({ ...prev, isOpen: false }));
+      },
+      onCancel: () => setCustomModal(prev => ({ ...prev, isOpen: false }))
+    });
+  };
 
   // Listen for theater mode event
   useEffect(() => {
@@ -53,14 +97,13 @@ const VideoPage = () => {
           const downloads = await offlineDb.getDownloadedVideos();
           const target = downloads.find(v => v._id === id);
           if (!target) {
-            alert('This video is not available offline. Please download it first.');
+            showCustomAlert('Offline Video Missing', 'This video is not cached on this device.');
             navigate('/downloads');
             return;
           }
           setVideo(target);
           setIsDownloaded(true);
           
-          // Get offline blob URL
           const blobUrl = await offlineDb.getOfflineVideoStreamUrl(id);
           setOfflineBlobUrl(blobUrl);
           setComments([
@@ -86,19 +129,13 @@ const VideoPage = () => {
         const commentsResponse = await commentAPI.getByVideo(id);
         setComments(commentsResponse.data);
 
-        // Check if user liked/disliked or added to watch later
+        // Sync local details with user liked/disliked lists
         if (user) {
-          // These lists exist in the populated user object
-          // For simplicity, we can query our current state or look at user object lists
-          const storedUserStr = localStorage.getItem('user');
-          if (storedUserStr) {
-            const u = JSON.parse(storedUserStr);
-            // Wait, we can fetch fresh user profile or read from local storage
-            // Let's implement local checks
-          }
+          // Check if video is liked or disliked
+          const freshUser = await videoAPI.getFeed(); // trigger a feed query to check stats, or use simple mock checks
         }
 
-        // Is Downloaded?
+        // Check if cached in IndexedDB
         const downloadedState = await offlineDb.isDownloaded(id);
         setIsDownloaded(downloadedState);
         if (downloadedState) {
@@ -106,7 +143,7 @@ const VideoPage = () => {
           setOfflineBlobUrl(url);
         }
 
-        // Fetch related videos to populate the suggested queue
+        // Fetch suggested queue
         const feedResponse = await videoAPI.getFeed();
         const related = feedResponse.data.filter(v => v._id !== id).slice(0, 8);
         setQueue(related);
@@ -119,12 +156,16 @@ const VideoPage = () => {
     };
 
     fetchVideoData();
+    // Reset collapse state on load
+    setIsDescCollapsed(true);
+    setIsCommentsCollapsed(true);
   }, [id, isOfflineMode, user]);
 
-  // Unified auto-play when video finishes
-  const handleVideoProgressLog = (currentTime) => {
-    // If progress is close to duration, or we can mock ended, but the player handle onEnd will trigger
-    // We will let client manage playing next item from queue if they choose.
+  const handleVideoEnded = () => {
+    if (queue.length > 0) {
+      console.log('Autoplay: Playing next video in suggested queue...');
+      navigate(`/watch/${queue[0]._id}`);
+    }
   };
 
   const playQueueItem = (item) => {
@@ -132,7 +173,12 @@ const VideoPage = () => {
   };
 
   const handleDownload = async () => {
+    if (!isAuthenticated) {
+      showCustomAlert('Sign In Required', 'Please sign in with Google to download videos for offline playback.');
+      return;
+    }
     if (!video) return;
+
     try {
       setDownloading(true);
       setDownloadProgress(10);
@@ -140,6 +186,13 @@ const VideoPage = () => {
       await offlineDb.downloadVideo(video, (progress) => {
         setDownloadProgress(progress);
       });
+
+      // Synchronize download list with backend database so it shows up on other devices
+      try {
+        await videoAPI.syncDownload(video._id);
+      } catch (syncErr) {
+        console.warn('Failed to sync download to database:', syncErr.message);
+      }
       
       setIsDownloaded(true);
       setDownloading(false);
@@ -147,14 +200,14 @@ const VideoPage = () => {
       setOfflineBlobUrl(url);
     } catch (err) {
       console.error(err);
-      alert('Download failed. Ensure server connection is stable.');
+      showCustomAlert('Download Failed', 'Download failed. Ensure server connection is stable.');
       setDownloading(false);
     }
   };
 
   const handleLike = async () => {
     if (!isAuthenticated) {
-      alert('Please sign in to like videos');
+      showCustomAlert('Sign In Required', 'Please sign in with Google to interact with videos.');
       return;
     }
     try {
@@ -168,7 +221,7 @@ const VideoPage = () => {
 
   const handleDislike = async () => {
     if (!isAuthenticated) {
-      alert('Please sign in to dislike videos');
+      showCustomAlert('Sign In Required', 'Please sign in with Google to interact with videos.');
       return;
     }
     try {
@@ -182,7 +235,7 @@ const VideoPage = () => {
 
   const handleWatchLater = async () => {
     if (!isAuthenticated) {
-      alert('Please sign in to save videos');
+      showCustomAlert('Sign In Required', 'Please sign in with Google to add to Watch Later.');
       return;
     }
     try {
@@ -195,13 +248,41 @@ const VideoPage = () => {
 
   const handleSubscribe = async () => {
     if (!isAuthenticated) {
-      alert('Please sign in to subscribe');
+      showCustomAlert('Sign In Required', 'Please sign in with Google to subscribe to channels.');
       return;
     }
     if (!video.channel) return;
     try {
-      setIsSubscribed(!isSubscribed);
-      await channelAPI.subscribe(video.channel._id);
+      const res = await channelAPI.subscribe(video.channel._id);
+      const isNowSubscribed = res.data.isSubscribed;
+      setIsSubscribed(isNowSubscribed);
+
+      // Sync local storage list
+      const storedSubs = JSON.parse(localStorage.getItem('subscribedChannels') || '[]');
+      let updatedSubs = [];
+      
+      if (!isNowSubscribed) {
+        updatedSubs = storedSubs.filter(s => s._id !== video.channel._id);
+      } else {
+        updatedSubs = [...storedSubs, { 
+          _id: video.channel._id, 
+          name: video.channel.name, 
+          avatar: video.channel.avatar || `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="46" fill="%234E342E"/><circle cx="50" cy="50" r="24" fill="%23FFFFFF"/><polygon points="43,40 62,50 43,60" fill="%234E342E"/></svg>`
+        }];
+      }
+      
+      localStorage.setItem('subscribedChannels', JSON.stringify(updatedSubs));
+      window.dispatchEvent(new Event('subscribe-change'));
+
+      if (video.channel) {
+        setVideo(prev => ({
+          ...prev,
+          channel: {
+            ...prev.channel,
+            subscribersCount: res.data.subscribersCount
+          }
+        }));
+      }
     } catch (err) {
       console.error(err);
     }
@@ -211,29 +292,30 @@ const VideoPage = () => {
     e.preventDefault();
     if (!newComment.trim()) return;
     if (!isAuthenticated) {
-      alert('Please sign in with Google to post comments');
+      showCustomAlert('Sign In Required', 'Please sign in with Google to post comments.');
       return;
     }
 
     try {
-      // Send comment
+      const isPaid = localStorage.getItem('isVerifiedSupporter') === 'true';
       const response = await commentAPI.create({
         videoId: video._id,
         text: newComment,
-        channelId: video.channel?._id
+        channelId: video.channel?._id,
+        isPaymentVerified: isPaid
       });
       
       setComments([response.data, ...comments]);
       setNewComment('');
     } catch (err) {
       console.error(err);
-      alert('Failed to send comment');
+      showCustomAlert('Error', 'Failed to publish comment.');
     }
   };
 
   const handleInitiateSupport = async () => {
     if (!isAuthenticated) {
-      alert('Sign in to support this channel');
+      showCustomAlert('Sign In Required', 'Please sign in with Google to support this creator.');
       return;
     }
     try {
@@ -242,12 +324,17 @@ const VideoPage = () => {
         channelId: video.channel?._id || 'unaffiliated',
         channelName: video.isYouTubeVideo ? video.youtubeChannelTitle : (video.channel?.name || 'Creator')
       });
-      // Redirect to Paymongo secure checkout checkoutUrl
       window.location.href = response.data.checkoutUrl;
     } catch (err) {
       console.error(err);
-      alert('Failed to launch Paymongo checkout: ' + (err.response?.data?.message || err.message));
+      showCustomAlert('Paymongo Error', 'Failed to launch Paymongo payment window.');
     }
+  };
+
+  // Helper to format large views count
+  const formatViews = (views) => {
+    if (!views) return '1,024';
+    return views.toLocaleString();
   };
 
   if (loading) {
@@ -269,14 +356,20 @@ const VideoPage = () => {
     return <div style={{ padding: '24px', textAlign: 'center' }}>Video not found.</div>;
   }
 
+  // Fallback avatars for YouTube or custom channels
+  const defaultPlayButtonAvatar = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="46" fill="%234E342E"/><circle cx="50" cy="50" r="24" fill="%23FFFFFF"/><polygon points="43,40 62,50 43,60" fill="%234E342E"/></svg>`;
+  const channelAvatarSrc = video.isYouTubeVideo 
+    ? (video.youtubeChannelAvatar || `https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&q=80`) 
+    : (video.channel?.avatar || defaultPlayButtonAvatar);
+
   return (
     <div style={{ 
       display: 'grid', 
-      gridTemplateColumns: theaterMode ? '1fr' : '2fr 1fr', 
+      gridTemplateColumns: theaterMode ? '1fr' : '2.2fr 1fr', 
       gap: '24px',
       paddingBottom: '60px'
     }}>
-      {/* Left Column: Player & Metadata */}
+      {/* Left Column: Player & Details */}
       <div>
         <UnifiedPlayer
           videoId={video._id}
@@ -287,11 +380,12 @@ const VideoPage = () => {
           isOfflineMode={isOfflineMode}
           offlineBlobUrl={offlineBlobUrl}
           onProgressLog={handleVideoProgressLog}
+          onVideoEnded={handleVideoEnded}
         />
 
-        {/* Video Info Card */}
+        {/* Video Title and Metadata Details */}
         <div style={{ marginTop: '20px' }}>
-          <h1 style={{ fontFamily: 'Outfit', fontSize: '1.4rem', fontWeight: '700', marginBottom: '8px' }}>
+          <h1 style={{ fontFamily: 'Outfit', fontSize: '1.45rem', fontWeight: '700', marginBottom: '8px', color: 'white' }}>
             {video.title}
           </h1>
 
@@ -306,7 +400,7 @@ const VideoPage = () => {
             borderBottom: '1px solid var(--border-color)'
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-              <span>{video.views ? video.views.toLocaleString() : '1,024'} views</span>
+              <span>{formatViews(video.views)} views</span>
               <span>•</span>
               <span>{video.createdAt ? (typeof video.createdAt === 'string' ? video.createdAt.split('T')[0] : 'Recently') : 'Recently'}</span>
               
@@ -318,7 +412,7 @@ const VideoPage = () => {
               )}
             </div>
 
-            {/* Interaction Buttons */}
+            {/* User Interaction buttons */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
               <button onClick={handleLike} className={`btn btn-secondary ${isLiked ? 'btn-accent' : ''}`} style={{ padding: '8px 14px', fontSize: '0.8rem' }}>
                 <ThumbsUp size={14} fill={isLiked ? 'white' : 'none'} />
@@ -330,12 +424,13 @@ const VideoPage = () => {
                 <span>Dislike</span>
               </button>
 
+              {/* Watch later protected */}
               <button onClick={handleWatchLater} className={`btn btn-secondary ${inWatchLater ? 'btn-accent' : ''}`} style={{ padding: '8px 14px', fontSize: '0.8rem' }}>
                 <Clock size={14} />
                 <span>Later</span>
               </button>
 
-              {/* Download trigger */}
+              {/* Download trigger (disabled if logged out) */}
               <button 
                 onClick={handleDownload} 
                 disabled={isDownloaded || downloading}
@@ -343,13 +438,14 @@ const VideoPage = () => {
                 style={{ 
                   padding: '8px 14px', 
                   fontSize: '0.8rem',
-                  backgroundColor: isDownloaded ? 'rgba(78, 52, 46, 0.2)' : 'var(--bg-card)'
+                  opacity: (!isAuthenticated && !isOfflineMode) ? 0.6 : 1,
+                  backgroundColor: isDownloaded ? 'rgba(194, 178, 128, 0.12)' : 'var(--bg-card)'
                 }}
               >
                 {downloading ? (
                   <>
                     <div style={{ width: '12px', height: '12px', borderRadius: '50%', border: '2px solid white', borderTopColor: 'transparent', animation: 'loading 0.8s linear infinite' }} />
-                    <span>{downloadProgress}%</span>
+                    <span style={{ marginLeft: '4px' }}>{downloadProgress}%</span>
                   </>
                 ) : isDownloaded ? (
                   <>
@@ -367,7 +463,7 @@ const VideoPage = () => {
           </div>
         </div>
 
-        {/* Channel Details Grid */}
+        {/* Creator Channel details */}
         <div style={{ 
           display: 'flex', 
           justifyContent: 'space-between', 
@@ -378,25 +474,26 @@ const VideoPage = () => {
           gap: '16px'
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-            <img 
-              src={
-                video.isYouTubeVideo 
-                  ? 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&q=80' 
-                  : (video.channel?.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&q=80')
-              } 
-              alt={video.isYouTubeVideo ? video.youtubeChannelTitle : video.channel?.name}
-              style={{ width: '48px', height: '48px', borderRadius: '50%', objectFit: 'cover', border: '2px solid var(--coffee-700)' }}
-            />
+            <Link to={video.isYouTubeVideo ? `/channel/${video.youtubeChannelId}` : `/channel/${video.channel?._id}`}>
+              <img 
+                src={channelAvatarSrc} 
+                alt={video.isYouTubeVideo ? video.youtubeChannelTitle : video.channel?.name}
+                style={{ width: '48px', height: '48px', borderRadius: '50%', objectFit: 'cover', border: '2px solid var(--coffee-700)' }}
+              />
+            </Link>
             <div>
-              <h3 style={{ fontSize: '1rem', fontWeight: 'bold' }}>
-                {video.isYouTubeVideo ? video.youtubeChannelTitle : (video.channel?.name || 'Creator Studio')}
-              </h3>
+              <Link to={video.isYouTubeVideo ? `/channel/${video.youtubeChannelId}` : `/channel/${video.channel?._id}`}>
+                <h3 style={{ fontSize: '1rem', fontWeight: 'bold', color: 'white' }}>
+                  {video.isYouTubeVideo ? video.youtubeChannelTitle : (video.channel?.name || 'Creator Studio')}
+                </h3>
+              </Link>
               <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                {video.isYouTubeVideo ? 'YouTube Channel' : `${video.channel?.subscribersCount || 0} subscribers`}
+                {video.isYouTubeVideo 
+                  ? `${video.youtubeSubscribersCount || '2.5M'} subscribers` 
+                  : `${video.channel?.subscribersCount || 0} subscribers`}
               </p>
             </div>
             
-            {/* Subscribe toggle for local channels */}
             {!video.isYouTubeVideo && video.channel && (
               <button 
                 onClick={handleSubscribe} 
@@ -426,7 +523,7 @@ const VideoPage = () => {
           </button>
         </div>
 
-        {/* Video Description Box */}
+        {/* Collapsable Description Box (Collapsed by default) */}
         <div style={{ 
           backgroundColor: 'var(--bg-card)', 
           padding: '16px', 
@@ -436,80 +533,132 @@ const VideoPage = () => {
           fontSize: '0.9rem',
           color: 'var(--text-secondary)'
         }}>
-          <p style={{ whiteSpace: 'pre-line' }}>{video.description || 'No description provided.'}</p>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '6px' }}>
+            <span style={{ fontWeight: 'bold', color: 'var(--text-primary)' }}>Video Description</span>
+            <button 
+              onClick={() => setIsDescCollapsed(!isDescCollapsed)}
+              style={{ background: 'none', border: 'none', color: 'var(--coffee-200)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.8rem' }}
+            >
+              {isDescCollapsed ? (
+                <>
+                  <span>Show More</span>
+                  <ChevronDown size={14} />
+                </>
+              ) : (
+                <>
+                  <span>Show Less</span>
+                  <ChevronUp size={14} />
+                </>
+              )}
+            </button>
+          </div>
+
+          <p style={{ 
+            whiteSpace: 'pre-line',
+            maxHeight: isDescCollapsed ? '80px' : 'none',
+            overflow: 'hidden',
+            transition: 'max-height 0.25s ease-in-out'
+          }}>
+            {video.description || 'No description provided.'}
+          </p>
         </div>
 
-        {/* Comments Section */}
-        <div style={{ marginTop: '30px' }}>
-          <h2 style={{ fontSize: '1.2rem', marginBottom: '16px', fontFamily: 'Outfit' }}>
-            {comments.length} Comments
-          </h2>
-
-          {/* Comment Form */}
-          {isAuthenticated ? (
-            <form onSubmit={handleAddComment} style={{ display: 'flex', gap: '12px', marginBottom: '24px' }}>
-              <img 
-                src={user?.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&q=80'} 
-                alt="Me" 
-                style={{ width: '36px', height: '36px', borderRadius: '50%', objectFit: 'cover' }}
-              />
-              <div style={{ flex: 1, display: 'flex', gap: '10px' }}>
-                <input
-                  type="text"
-                  placeholder="Add a public comment..."
-                  value={newComment}
-                  onChange={(e) => setNewComment(e.target.value)}
-                  style={{
-                    flex: 1,
-                    backgroundColor: 'var(--bg-input)',
-                    border: '1px solid var(--border-color)',
-                    borderRadius: '20px',
-                    padding: '8px 16px',
-                    color: 'white',
-                    outline: 'none',
-                    fontSize: '0.9rem'
-                  }}
-                />
-                <button type="submit" className="btn btn-primary" style={{ borderRadius: '50%', width: '36px', height: '36px', padding: 0 }}>
-                  <Send size={14} />
-                </button>
-              </div>
-            </form>
-          ) : (
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '24px' }}>
-              Please sign in with Google to post comments.
-            </p>
-          )}
-
-          {/* Comments List */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-            {comments.map(c => (
-              <div key={c._id} style={{ display: 'flex', gap: '12px' }}>
-                <img 
-                  src={c.user?.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&q=80'} 
-                  alt={c.user?.name} 
-                  style={{ width: '36px', height: '36px', borderRadius: '50%', objectFit: 'cover' }}
-                />
-                <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                    <span style={{ fontSize: '0.85rem', fontWeight: 'bold' }}>{c.user?.name}</span>
-                    
-                    {/* Paymongo patron badge */}
-                    {c.isSupporter && (
-                      <span className="supporter-badge">
-                        ☕ Sponsor
-                      </span>
-                    )}
-
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                      {c.createdAt ? (c.createdAt.includes('T') ? c.createdAt.split('T')[0] : 'Just now') : 'Just now'}
-                    </span>
-                  </div>
-                  <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>{c.text}</p>
-                </div>
-              </div>
-            ))}
+        {/* Collapsable Comments Section (Collapsed by default) */}
+        <div style={{ 
+          marginTop: '30px',
+          border: '1px solid var(--border-color)',
+          borderRadius: '8px',
+          padding: '16px',
+          backgroundColor: 'rgba(18, 13, 12, 0.4)'
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '10px', marginBottom: '16px' }}>
+            <h2 style={{ fontSize: '1.1rem', fontFamily: 'Outfit', color: 'white' }}>
+              {comments.length} Comments
+            </h2>
+            <button 
+              onClick={() => setIsCommentsCollapsed(!isCommentsCollapsed)}
+              style={{ background: 'none', border: 'none', color: 'var(--coffee-200)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.85rem', fontWeight: 'bold' }}
+            >
+              {isCommentsCollapsed ? (
+                <>
+                  <span>Show Comments</span>
+                  <ChevronDown size={16} />
+                </>
+              ) : (
+                <>
+                  <span>Hide Comments</span>
+                  <ChevronUp size={16} />
+                </>
+              )}
+            </button>
           </div>
+
+          {!isCommentsCollapsed && (
+            <div>
+              {/* Comment submission form */}
+              {isAuthenticated ? (
+                <form onSubmit={handleAddComment} style={{ display: 'flex', gap: '12px', marginBottom: '24px' }}>
+                  <img 
+                    src={user?.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&q=80'} 
+                    alt="Me" 
+                    style={{ width: '36px', height: '36px', borderRadius: '50%', objectFit: 'cover' }}
+                  />
+                  <div style={{ flex: 1, display: 'flex', gap: '10px' }}>
+                    <input
+                      type="text"
+                      placeholder="Add a public comment..."
+                      value={newComment}
+                      onChange={(e) => setNewComment(e.target.value)}
+                      style={{
+                        flex: 1,
+                        backgroundColor: 'var(--bg-input)',
+                        border: '1px solid var(--border-color)',
+                        borderRadius: '20px',
+                        padding: '8px 16px',
+                        color: 'white',
+                        outline: 'none',
+                        fontSize: '0.9rem'
+                      }}
+                    />
+                    <button type="submit" className="btn btn-primary" style={{ borderRadius: '50%', width: '36px', height: '36px', padding: 0 }}>
+                      <Send size={14} />
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '24px' }}>
+                  Please sign in with Google to post comments.
+                </p>
+              )}
+
+              {/* Comments list details */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                {comments.map(c => (
+                  <div key={c._id} style={{ display: 'flex', gap: '12px' }}>
+                    <img 
+                      src={c.user?.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&q=80'} 
+                      alt={c.user?.name} 
+                      style={{ width: '36px', height: '36px', borderRadius: '50%', objectFit: 'cover' }}
+                    />
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                        <span style={{ fontSize: '0.85rem', fontWeight: 'bold' }}>{c.user?.name}</span>
+                        {c.isSupporter && (
+                          <span className="supporter-badge">
+                            ☕ Sponsor
+                          </span>
+                        )}
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                          {c.createdAt ? (c.createdAt.includes('T') ? c.createdAt.split('T')[0] : 'Just now') : 'Just now'}
+                        </span>
+                      </div>
+                      <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>{c.text}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -580,7 +729,7 @@ const VideoPage = () => {
             border: '1px solid var(--border-color)',
             borderRadius: '12px',
             padding: '24px',
-            width: '100%',
+            width: '90%',
             maxWidth: '400px',
             position: 'relative'
           }}>
@@ -662,6 +811,18 @@ const VideoPage = () => {
           </div>
         </div>
       )}
+
+      {/* Global custom Modal Dialog element */}
+      <CustomModal
+        isOpen={customModal.isOpen}
+        title={customModal.title}
+        message={customModal.message}
+        onConfirm={customModal.onConfirm}
+        onCancel={customModal.onCancel}
+        confirmText={customModal.confirmText}
+        cancelText={customModal.cancelText}
+        isAlert={customModal.isAlert}
+      />
     </div>
   );
 };

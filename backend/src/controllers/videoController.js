@@ -106,6 +106,7 @@ export const searchVideos = async (req, res) => {
         youtubeVideoId: v.videoId,
         youtubeChannelTitle: v.author.name,
         youtubeChannelId: v.author.url.split('/').pop() || v.author.name,
+        youtubeChannelAvatar: v.author.image || '',
         youtubeSubscribersCount: `${getDeterministicSubs(v.author.name)} subscribers`,
         createdAt: v.ago || 'Uploaded recently'
       }));
@@ -169,6 +170,7 @@ export const getHomeFeed = async (req, res) => {
         youtubeVideoId: v.videoId,
         youtubeChannelTitle: v.author.name,
         youtubeChannelId: v.author.url.split('/').pop() || v.author.name,
+        youtubeChannelAvatar: v.author.image || '',
         createdAt: v.ago || '1 year ago'
       }));
     } catch (e) {
@@ -234,6 +236,7 @@ export const getVideoById = async (req, res) => {
             youtubeVideoId: queryResult.videoId,
             youtubeChannelTitle: queryResult.author.name,
             youtubeChannelId: queryResult.author.url.split('/').pop() || queryResult.author.name,
+            youtubeChannelAvatar: queryResult.author.image || '',
             createdAt: queryResult.ago || 'Uploaded to YouTube'
           });
         }
@@ -282,12 +285,36 @@ export const createVideo = async (req, res) => {
       videoUrl,
       thumbnailUrl,
       duration: duration || 0,
-      category: category || 'General',
+      category: category || 'Coffee',
       tags: tags || [],
       channel: channel._id,
       isYouTubeVideo: false,
       location: location || null
     });
+
+    // Send WebSocket notification to all channel subscribers
+    const io = req.app.get('io');
+    if (io) {
+      try {
+        const { activeSockets } = await import('../server.js');
+        const channelDetails = await Channel.findById(channel._id);
+        const subs = channelDetails.subscribers || [];
+        
+        subs.forEach(subId => {
+          const socketId = activeSockets.get(subId.toString());
+          if (socketId) {
+            io.to(socketId).emit('new-video', {
+              videoId: video._id,
+              videoTitle: video.title,
+              channelName: channelDetails.name,
+              channelId: channelDetails._id
+            });
+          }
+        });
+      } catch (wsError) {
+        console.error('Socket notification broadcast failed:', wsError.message);
+      }
+    }
 
     res.status(201).json(video);
   } catch (error) {
@@ -432,6 +459,114 @@ export const logHistory = async (req, res) => {
 
     await user.save();
     res.status(200).json(user.history);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Sync download record to user database list
+export const syncDownload = async (req, res) => {
+  const { videoId } = req.body;
+  const userId = req.user._id;
+
+  if (!videoId) {
+    return res.status(400).json({ message: 'Video ID is required' });
+  }
+
+  try {
+    const user = await User.findById(userId);
+    if (!user.downloads.includes(videoId)) {
+      user.downloads.push(videoId);
+      await user.save();
+    }
+    res.status(200).json({ success: true, downloads: user.downloads });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Remove download record from user database list
+export const unsyncDownload = async (req, res) => {
+  const { id } = req.params;
+  const userId = req.user._id;
+
+  try {
+    const user = await User.findById(userId);
+    user.downloads = user.downloads.filter(d => d !== id);
+    await user.save();
+    res.status(200).json({ success: true, downloads: user.downloads });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Retrieve synced downloads from DB (populates metadata details)
+export const getSyncedDownloads = async (req, res) => {
+  const userId = req.user._id;
+
+  try {
+    const user = await User.findById(userId);
+    const downloadIds = user.downloads || [];
+    
+    // Split into local database IDs and YouTube IDs
+    const localVideoIds = downloadIds.filter(id => id.match(/^[0-9a-fA-F]{24}$/));
+    const ytVideoIds = downloadIds.filter(id => !id.match(/^[0-9a-fA-F]{24}$/));
+
+    const localVids = await Video.find({ _id: { $in: localVideoIds } }).populate('channel');
+    
+    const ytVids = await Promise.all(ytVideoIds.map(async id => {
+      try {
+        const queryResult = await ytSearch({ videoId: id });
+        if (queryResult) {
+          return {
+            _id: queryResult.videoId,
+            title: queryResult.title,
+            description: queryResult.description || `YouTube video`,
+            videoUrl: queryResult.url,
+            thumbnailUrl: queryResult.thumbnail || queryResult.image,
+            duration: queryResult.seconds,
+            views: queryResult.views || 100000,
+            likes: Math.round((queryResult.views || 100000) * 0.05),
+            isYouTubeVideo: true,
+            youtubeVideoId: queryResult.videoId,
+            youtubeChannelTitle: queryResult.author.name,
+            youtubeChannelId: queryResult.author.url.split('/').pop() || queryResult.author.name,
+            createdAt: queryResult.ago || 'Uploaded to YouTube'
+          };
+        }
+      } catch (err) {}
+      
+      return {
+        _id: id,
+        title: 'Offline YouTube Video',
+        thumbnailUrl: `https://img.youtube.com/vi/${id}/hqdefault.jpg`,
+        duration: 320,
+        isYouTubeVideo: true,
+        youtubeVideoId: id,
+        youtubeChannelTitle: 'YouTube Creator',
+        createdAt: 'Uploaded to YouTube'
+      };
+    }));
+
+    const allDownloads = [
+      ...localVids.map(v => ({
+        _id: v._id,
+        title: v.title,
+        description: v.description,
+        videoUrl: v.videoUrl,
+        thumbnailUrl: v.thumbnailUrl,
+        duration: v.duration,
+        views: v.views,
+        likes: v.likes,
+        channel: v.channel,
+        isYouTubeVideo: false,
+        location: v.location,
+        createdAt: v.createdAt
+      })),
+      ...ytVids
+    ];
+
+    res.status(200).json(allDownloads);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

@@ -8,7 +8,13 @@ const channelSchema = new mongoose.Schema({
   description: { type: String },
   owner: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   subscribers: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
-  subscribersCount: { type: Number, default: 0 }
+  subscribersCount: { type: Number, default: 0 },
+  socials: {
+    twitter: { type: String, default: '' },
+    instagram: { type: String, default: '' },
+    github: { type: String, default: '' },
+    website: { type: String, default: '' }
+  }
 }, { timestamps: true });
 
 const Channel = mongoose.model('Channel', channelSchema);

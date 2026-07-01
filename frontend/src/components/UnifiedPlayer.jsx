@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { Play, Pause, Volume2, VolumeX, Maximize, Minimize, Settings, Video } from 'lucide-react';
+import { Play, Pause, Volume2, VolumeX, Maximize, Minimize, Settings, Tv, PictureInPicture } from 'lucide-react';
 
 const UnifiedPlayer = ({ 
   videoId, 
@@ -9,7 +9,8 @@ const UnifiedPlayer = ({
   youtubeVideoId, 
   isOfflineMode, 
   offlineBlobUrl,
-  onProgressLog
+  onProgressLog,
+  onVideoEnded // Callback when video ends
 }) => {
   const containerRef = useRef(null);
   const videoRef = useRef(null); // Ref for HTML5 video
@@ -24,6 +25,9 @@ const UnifiedPlayer = ({
   const [isTheaterMode, setIsTheaterMode] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showSpeedMenu, setShowSpeedMenu] = useState(false);
+  const [showSettingsMenu, setShowSettingsMenu] = useState(false);
+  const [selectedResolution, setSelectedResolution] = useState('Auto');
+  const [isAutoplayEnabled, setIsAutoplayEnabled] = useState(true);
   const [ytReady, setYtReady] = useState(false);
 
   const useYtEmbed = isYouTubeVideo && !isOfflineMode;
@@ -40,7 +44,6 @@ const UnifiedPlayer = ({
       return;
     }
 
-    // Initialize/Load YT API script
     if (!window.YT) {
       const tag = document.createElement('script');
       tag.src = 'https://www.youtube.com/iframe_api';
@@ -72,11 +75,15 @@ const UnifiedPlayer = ({
               event.target.setPlaybackRate(playbackSpeed);
             },
             onStateChange: (event) => {
-              // YT.PlayerState.PLAYING = 1, YT.PlayerState.PAUSED = 2
               if (event.data === window.YT.PlayerState.PLAYING) {
                 setIsPlaying(true);
               } else if (event.data === window.YT.PlayerState.PAUSED) {
                 setIsPlaying(false);
+              } else if (event.data === window.YT.PlayerState.ENDED) {
+                setIsPlaying(false);
+                if (isAutoplayEnabled && onVideoEnded) {
+                  onVideoEnded();
+                }
               }
             }
           }
@@ -112,6 +119,48 @@ const UnifiedPlayer = ({
     setCurrentTime(0);
   }, [videoId, isOfflineMode]);
 
+  // --- Keyboard controls ---
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA') {
+        return;
+      }
+
+      const key = e.key.toLowerCase();
+      
+      if (key === ' ' || key === 'k') {
+        e.preventDefault();
+        togglePlay();
+      } else if (key === 'arrowleft' || key === 'j') {
+        e.preventDefault();
+        const offset = key === 'j' ? 10 : 5;
+        seekTo(Math.max(0, currentTime - offset));
+      } else if (key === 'arrowright' || key === 'l') {
+        e.preventDefault();
+        const offset = key === 'l' ? 10 : 5;
+        seekTo(Math.min(duration, currentTime + offset));
+      } else if (key === 'arrowup') {
+        e.preventDefault();
+        changeVolume(Math.min(1, volume + 0.05));
+      } else if (key === 'arrowdown') {
+        e.preventDefault();
+        changeVolume(Math.max(0, volume - 0.05));
+      } else if (key === 'm') {
+        e.preventDefault();
+        toggleMute();
+      } else if (key === 'f') {
+        e.preventDefault();
+        toggleFullscreen();
+      } else if (key === 't') {
+        e.preventDefault();
+        toggleTheaterMode();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [currentTime, duration, volume, isMuted, isPlaying, ytReady, useYtEmbed, isAutoplayEnabled]);
+
   // --- HTML5 Player Event Handlers ---
   const handleHTML5TimeUpdate = () => {
     if (videoRef.current) {
@@ -128,9 +177,41 @@ const UnifiedPlayer = ({
 
   const handleHTML5Ended = () => {
     setIsPlaying(false);
+    if (isAutoplayEnabled && onVideoEnded) {
+      onVideoEnded();
+    }
   };
 
-  // --- Unified Controls Actions ---
+  // --- Unified Helpers ---
+  const seekTo = (seconds) => {
+    setCurrentTime(seconds);
+    if (useYtEmbed) {
+      if (ytPlayerRef.current && ytPlayerRef.current.seekTo) {
+        ytPlayerRef.current.seekTo(seconds, true);
+      }
+    } else {
+      if (videoRef.current) {
+        videoRef.current.currentTime = seconds;
+      }
+    }
+  };
+
+  const changeVolume = (val) => {
+    setVolume(val);
+    setIsMuted(val === 0);
+    if (useYtEmbed) {
+      if (ytPlayerRef.current && ytPlayerRef.current.setVolume) {
+        ytPlayerRef.current.setVolume(val * 100);
+        ytPlayerRef.current.unMute();
+      }
+    } else {
+      if (videoRef.current) {
+        videoRef.current.volume = val;
+        videoRef.current.muted = false;
+      }
+    }
+  };
+
   const togglePlay = () => {
     if (useYtEmbed) {
       if (!ytReady || !ytPlayerRef.current) return;
@@ -153,36 +234,11 @@ const UnifiedPlayer = ({
   };
 
   const handleScrubChange = (e) => {
-    const scrubTime = parseFloat(e.target.value);
-    setCurrentTime(scrubTime);
-
-    if (useYtEmbed) {
-      if (ytPlayerRef.current && ytPlayerRef.current.seekTo) {
-        ytPlayerRef.current.seekTo(scrubTime, true);
-      }
-    } else {
-      if (videoRef.current) {
-        videoRef.current.currentTime = scrubTime;
-      }
-    }
+    seekTo(parseFloat(e.target.value));
   };
 
   const handleVolumeChange = (e) => {
-    const val = parseFloat(e.target.value);
-    setVolume(val);
-    setIsMuted(val === 0);
-
-    if (useYtEmbed) {
-      if (ytPlayerRef.current && ytPlayerRef.current.setVolume) {
-        ytPlayerRef.current.setVolume(val * 100);
-        ytPlayerRef.current.unMute();
-      }
-    } else {
-      if (videoRef.current) {
-        videoRef.current.volume = val;
-        videoRef.current.muted = false;
-      }
-    }
+    changeVolume(parseFloat(e.target.value));
   };
 
   const toggleMute = () => {
@@ -222,7 +278,6 @@ const UnifiedPlayer = ({
 
   const toggleTheaterMode = () => {
     setIsTheaterMode(!isTheaterMode);
-    // Dispatch global event so page layout can expand
     window.dispatchEvent(new CustomEvent('toggle-theater', { detail: !isTheaterMode }));
   };
 
@@ -239,6 +294,23 @@ const UnifiedPlayer = ({
     }
   };
 
+  const togglePictureInPicture = async () => {
+    if (useYtEmbed) {
+      alert('Picture-in-Picture is restricted on YouTube embeds.');
+      return;
+    }
+    if (!videoRef.current) return;
+    try {
+      if (document.pictureInPictureElement) {
+        await document.exitPictureInPicture();
+      } else {
+        await videoRef.current.requestPictureInPicture();
+      }
+    } catch (err) {
+      console.error('Failed to toggle Picture-in-Picture:', err);
+    }
+  };
+
   // Keep fullscreen state in sync if exited with Esc key
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -248,12 +320,17 @@ const UnifiedPlayer = ({
     return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
   }, []);
 
-  // Format seconds to mm:ss
+  // Format seconds to H:MM:SS or MM:SS correctly
   const formatTime = (secs) => {
-    if (isNaN(secs)) return '0:00';
-    const m = Math.floor(secs / 60);
-    const s = Math.floor(secs % 60);
-    return `${m}:${s < 10 ? '0' : ''}${s}`;
+    if (isNaN(secs) || secs === null) return '0:00';
+    const hrs = Math.floor(secs / 3600);
+    const mins = Math.floor((secs % 3600) / 60);
+    const seconds = Math.floor(secs % 60);
+    
+    if (hrs > 0) {
+      return `${hrs}:${mins < 10 ? '0' : ''}${mins}:${seconds < 10 ? '0' : ''}${seconds}`;
+    }
+    return `${mins}:${seconds < 10 ? '0' : ''}${seconds}`;
   };
 
   return (
@@ -275,7 +352,7 @@ const UnifiedPlayer = ({
           width: '100%',
           height: '100%',
           display: useYtEmbed ? 'block' : 'none',
-          pointerEvents: 'none' // Intercept interactions via our custom overlay
+          pointerEvents: 'none'
         }}
       >
         <div id="youtube-player-frame" style={{ width: '100%', height: '100%' }}></div>
@@ -347,12 +424,48 @@ const UnifiedPlayer = ({
             </span>
           </div>
 
-          <div className="custom-player-group">
+          <div className="custom-player-group" style={{ gap: '12px' }}>
+            {/* Autoplay Switch */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Autoplay</span>
+              <button 
+                onClick={() => setIsAutoplayEnabled(!isAutoplayEnabled)}
+                style={{
+                  width: '32px',
+                  height: '16px',
+                  borderRadius: '10px',
+                  backgroundColor: isAutoplayEnabled ? 'var(--accent-light)' : 'rgba(255,255,255,0.2)',
+                  border: 'none',
+                  position: 'relative',
+                  cursor: 'pointer',
+                  transition: 'background-color 0.2s'
+                }}
+              >
+                <div style={{
+                  width: '12px',
+                  height: '12px',
+                  borderRadius: '50%',
+                  backgroundColor: 'white',
+                  position: 'absolute',
+                  top: '2px',
+                  left: isAutoplayEnabled ? '18px' : '2px',
+                  transition: 'left 0.2s'
+                }} />
+              </button>
+            </div>
+
+            {/* Picture-in-Picture */}
+            {!useYtEmbed && (
+              <button className="custom-player-btn" onClick={togglePictureInPicture} title="Picture in Picture">
+                <PictureInPicture size={18} />
+              </button>
+            )}
+
             {/* Speed selection */}
             <div style={{ position: 'relative' }}>
               <button 
                 className="custom-player-btn" 
-                onClick={() => setShowSpeedMenu(!showSpeedMenu)}
+                onClick={() => { setShowSpeedMenu(!showSpeedMenu); setShowSettingsMenu(false); }}
                 style={{ fontSize: '0.85rem', fontWeight: 'bold' }}
               >
                 {playbackSpeed}x
@@ -396,15 +509,61 @@ const UnifiedPlayer = ({
               )}
             </div>
 
+            {/* Settings Button */}
+            <div style={{ position: 'relative' }}>
+              <button 
+                className="custom-player-btn" 
+                onClick={() => { setShowSettingsMenu(!showSettingsMenu); setShowSpeedMenu(false); }}
+              >
+                <Settings size={18} />
+              </button>
+              
+              {showSettingsMenu && (
+                <div 
+                  style={{
+                    position: 'absolute',
+                    bottom: '130%',
+                    right: 0,
+                    backgroundColor: '#1E1412',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: '8px',
+                    padding: '8px 0',
+                    width: '150px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    zIndex: 100,
+                    boxShadow: 'var(--shadow-md)'
+                  }}
+                >
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', padding: '4px 12px', borderBottom: '1px solid var(--border-color)' }}>Quality Option</span>
+                  {['1080p HD', '720p', '480p', 'Auto'].map(res => (
+                    <button
+                      key={res}
+                      onClick={() => { setSelectedResolution(res); setShowSettingsMenu(false); }}
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        color: 'white',
+                        padding: '8px 12px',
+                        cursor: 'pointer',
+                        fontSize: '0.8rem',
+                        textAlign: 'left',
+                        backgroundColor: selectedResolution === res ? 'var(--coffee-700)' : 'transparent',
+                        display: 'flex',
+                        justifyContent: 'space-between'
+                      }}
+                    >
+                      <span>{res}</span>
+                      {selectedResolution === res && <span style={{ color: 'var(--accent-light)' }}>✓</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
             {/* Theater Mode */}
-            <button className="custom-player-btn" onClick={toggleTheaterMode}>
-              <span style={{ 
-                border: '2px solid white', 
-                width: '18px', 
-                height: '12px', 
-                borderRadius: '2px',
-                display: 'inline-block'
-              }}></span>
+            <button className="custom-player-btn" onClick={toggleTheaterMode} title="Theater Mode">
+              <Tv size={18} />
             </button>
 
             {/* Fullscreen */}

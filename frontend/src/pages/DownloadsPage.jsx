@@ -1,12 +1,18 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Download, Trash2, Video, WifiOff } from 'lucide-react';
+import { Download, Trash2, Video } from 'lucide-react';
 import { offlineDb } from '../lib/offlineDb';
+import { videoAPI } from '../lib/api';
+import CustomModal from '../components/CustomModal';
 
 const DownloadsPage = () => {
   const navigate = useNavigate();
   const [downloads, setDownloads] = useState([]);
   const [loading, setLoading] = useState(true);
+  
+  // Custom Modal States
+  const [modalOpen, setModalOpen] = useState(false);
+  const [selectedVideoId, setSelectedVideoId] = useState(null);
 
   const fetchDownloads = async () => {
     try {
@@ -23,20 +29,41 @@ const DownloadsPage = () => {
     fetchDownloads();
   }, []);
 
-  const handleDelete = async (e, videoId) => {
+  const handleDeleteTrigger = (e, videoId) => {
     e.stopPropagation(); // Prevent card navigation trigger
-    if (window.confirm('Delete this offline download?')) {
-      await offlineDb.deleteDownloadedVideo(videoId);
+    setSelectedVideoId(videoId);
+    setModalOpen(true);
+  };
+
+  const confirmDelete = async () => {
+    if (selectedVideoId) {
+      try {
+        // Delete locally from IndexedDB
+        await offlineDb.deleteDownloadedVideo(selectedVideoId);
+        
+        // Unsync from database so it deletes on other devices
+        await videoAPI.unsyncDownload(selectedVideoId);
+      } catch (err) {
+        console.warn('Backend unsync failed or operating offline:', err.message);
+      }
+      
+      setModalOpen(false);
+      setSelectedVideoId(null);
       await fetchDownloads();
     }
   };
 
-  // Format seconds to mm:ss
+  // Format seconds to H:MM:SS or MM:SS correctly
   const formatDuration = (secs) => {
-    if (!secs) return '0:00';
-    const m = Math.floor(secs / 60);
-    const s = Math.floor(secs % 60);
-    return `${m}:${s < 10 ? '0' : ''}${s}`;
+    if (isNaN(secs) || secs === null) return '0:00';
+    const hrs = Math.floor(secs / 3600);
+    const mins = Math.floor((secs % 3600) / 60);
+    const seconds = Math.floor(secs % 60);
+    
+    if (hrs > 0) {
+      return `${hrs}:${mins < 10 ? '0' : ''}${mins}:${seconds < 10 ? '0' : ''}${seconds}`;
+    }
+    return `${mins}:${seconds < 10 ? '0' : ''}${seconds}`;
   };
 
   if (loading) {
@@ -176,7 +203,7 @@ const DownloadsPage = () => {
 
               {/* Delete trigger */}
               <button
-                onClick={(e) => handleDelete(e, video._id)}
+                onClick={(e) => handleDeleteTrigger(e, video._id)}
                 className="btn btn-secondary"
                 style={{
                   position: 'absolute',
@@ -196,6 +223,17 @@ const DownloadsPage = () => {
           ))}
         </div>
       )}
+
+      {/* Confirmation Windowed Overlay */}
+      <CustomModal
+        isOpen={modalOpen}
+        title="Delete Offline Download?"
+        message="Are you sure you want to remove this video from your local IndexedDB storage? This will also unsync it from your cross-device downloads library."
+        confirmText="Delete"
+        cancelText="Cancel"
+        onConfirm={confirmDelete}
+        onCancel={() => { setModalOpen(false); setSelectedVideoId(null); }}
+      />
     </div>
   );
 };
