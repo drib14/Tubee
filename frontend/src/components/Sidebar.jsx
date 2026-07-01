@@ -94,23 +94,7 @@ const Sidebar = () => {
             <span>Liked Videos</span>
           </NavLink>
 
-          <NavLink 
-            to="/downloads" 
-            className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
-          >
-            <Download size={18} />
-            <span>Downloads</span>
-          </NavLink>
 
-          {user?.channel && (
-            <NavLink 
-              to={`/channel/${user.channel._id || user.channel}`} 
-              className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
-            >
-              <Tv size={18} />
-              <span>My Studio</span>
-            </NavLink>
-          )}
 
           {/* Subscriptions Segment */}
           <div style={{ height: '1px', backgroundColor: 'var(--border-color)', margin: '8px 16px' }} />

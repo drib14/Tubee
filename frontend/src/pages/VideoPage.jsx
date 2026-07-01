@@ -429,36 +429,6 @@ const VideoPage = () => {
                 <Clock size={14} />
                 <span>Later</span>
               </button>
-
-              {/* Download trigger (disabled if logged out) */}
-              <button 
-                onClick={handleDownload} 
-                disabled={isDownloaded || downloading}
-                className="btn btn-secondary" 
-                style={{ 
-                  padding: '8px 14px', 
-                  fontSize: '0.8rem',
-                  opacity: (!isAuthenticated && !isOfflineMode) ? 0.6 : 1,
-                  backgroundColor: isDownloaded ? 'rgba(194, 178, 128, 0.12)' : 'var(--bg-card)'
-                }}
-              >
-                {downloading ? (
-                  <>
-                    <div style={{ width: '12px', height: '12px', borderRadius: '50%', border: '2px solid white', borderTopColor: 'transparent', animation: 'loading 0.8s linear infinite' }} />
-                    <span style={{ marginLeft: '4px' }}>{downloadProgress}%</span>
-                  </>
-                ) : isDownloaded ? (
-                  <>
-                    <Check size={14} style={{ color: 'var(--coffee-200)' }} />
-                    <span style={{ color: 'var(--coffee-200)' }}>Downloaded</span>
-                  </>
-                ) : (
-                  <>
-                    <Download size={14} />
-                    <span>Download</span>
-                  </>
-                )}
-              </button>
             </div>
           </div>
         </div>
@@ -504,23 +474,6 @@ const VideoPage = () => {
               </button>
             )}
           </div>
-
-          {/* Paymongo Donation Support Trigger */}
-          <button 
-            onClick={() => setShowSupportModal(true)} 
-            className="btn btn-primary"
-            style={{ 
-              backgroundColor: 'var(--coffee-800)', 
-              color: 'var(--coffee-200)',
-              border: '1px solid var(--coffee-700)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px'
-            }}
-          >
-            <Coffee size={16} fill="var(--coffee-200)" />
-            <span>Support Channel</span>
-          </button>
         </div>
 
         {/* Collapsable Description Box (Collapsed by default) */}

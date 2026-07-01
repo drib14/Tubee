@@ -15,7 +15,7 @@ const getDeterministicSubs = (name) => {
   return `${value}K`;
 };
 
-// Search videos - merges local uploads and YouTube search results
+// Search videos - queries YouTube search results exclusively
 export const searchVideos = async (req, res) => {
   const { q } = req.query;
 
@@ -24,53 +24,6 @@ export const searchVideos = async (req, res) => {
   }
 
   try {
-    // 1. Search local channels
-    const localChannels = await Channel.find({
-      $or: [
-        { name: { $regex: q, $options: 'i' } },
-        { handle: { $regex: q, $options: 'i' } }
-      ]
-    });
-
-    const formattedLocalChannels = localChannels.map(ch => ({
-      _id: ch._id,
-      type: 'channel',
-      name: ch.name,
-      handle: ch.handle,
-      avatar: ch.avatar,
-      description: ch.description || 'Tubee Content Creator',
-      subscribersCount: `${ch.subscribersCount} subscribers`,
-      isYouTubeChannel: false
-    }));
-
-    // 2. Search local videos
-    const localVideos = await Video.find({
-      $or: [
-        { title: { $regex: q, $options: 'i' } },
-        { description: { $regex: q, $options: 'i' } },
-        { tags: { $in: [new RegExp(q, 'i')] } }
-      ]
-    }).populate('channel');
-
-    const formattedLocal = localVideos.map(vid => ({
-      _id: vid._id,
-      type: 'video',
-      title: vid.title,
-      description: vid.description,
-      videoUrl: vid.videoUrl,
-      thumbnailUrl: vid.thumbnailUrl,
-      duration: vid.duration,
-      views: vid.views,
-      likes: vid.likes,
-      dislikes: vid.dislikes,
-      category: vid.category,
-      channel: vid.channel,
-      isYouTubeVideo: false,
-      location: vid.location,
-      createdAt: vid.createdAt
-    }));
-
-    // 3. Search YouTube
     let ytResults = [];
     let ytChannels = [];
     try {
@@ -114,11 +67,9 @@ export const searchVideos = async (req, res) => {
       console.error('YouTube search failed:', e.message);
     }
 
-    // Merge lists (channels first, local items prioritized)
+    // Merge lists (channels first)
     const results = [
-      ...formattedLocalChannels,
       ...ytChannels,
-      ...formattedLocal,
       ...ytResults
     ];
     res.status(200).json(results);
@@ -127,29 +78,9 @@ export const searchVideos = async (req, res) => {
   }
 };
 
-// Get feed for home screen - merges local content and dynamic aesthetic/programming YouTube content
+// Get feed for home screen - dynamic YouTube content
 export const getHomeFeed = async (req, res) => {
   try {
-    // 1. Retrieve all local uploads
-    const localVideos = await Video.find().populate('channel').sort({ createdAt: -1 });
-    const formattedLocal = localVideos.map(vid => ({
-      _id: vid._id,
-      title: vid.title,
-      description: vid.description,
-      videoUrl: vid.videoUrl,
-      thumbnailUrl: vid.thumbnailUrl,
-      duration: vid.duration,
-      views: vid.views,
-      likes: vid.likes,
-      dislikes: vid.dislikes,
-      category: vid.category,
-      channel: vid.channel,
-      isYouTubeVideo: false,
-      location: vid.location,
-      createdAt: vid.createdAt
-    }));
-
-    // 2. Fetch default trending video topics (Lofi coding, tech, coffee)
     let ytFeed = [];
     try {
       const searchTopics = ['lofi chill beats', 'coffee shop coding session', 'nextjs tutorial', 'web dev portfolio'];
@@ -177,88 +108,56 @@ export const getHomeFeed = async (req, res) => {
       console.error('YouTube home feed fetch failed:', e.message);
     }
 
-    // Merge and shuffle slightly
-    const blendedFeed = [...formattedLocal, ...ytFeed];
-    res.status(200).json(blendedFeed);
+    res.status(200).json(ytFeed);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 };
 
-// Get single video by ID (can be custom DB object ID or YouTube video ID)
+// Get single video by ID (looks up metadata directly from YouTube search)
 export const getVideoById = async (req, res) => {
   const { id } = req.params;
 
   try {
-    // Check if ID is a Mongo object ID
-    if (id.match(/^[0-9a-fA-F]{24}$/)) {
-      const localVid = await Video.findById(id).populate('channel');
-      if (!localVid) {
-        return res.status(404).json({ message: 'Video not found' });
-      }
-      
-      // Increment local views
-      localVid.views += 1;
-      await localVid.save();
-      
-      return res.status(200).json({
-        _id: localVid._id,
-        title: localVid.title,
-        description: localVid.description,
-        videoUrl: localVid.videoUrl,
-        thumbnailUrl: localVid.thumbnailUrl,
-        duration: localVid.duration,
-        views: localVid.views,
-        likes: localVid.likes,
-        dislikes: localVid.dislikes,
-        category: localVid.category,
-        channel: localVid.channel,
-        isYouTubeVideo: false,
-        location: localVid.location,
-        createdAt: localVid.createdAt
-      });
-    } else {
-      // Fetch single video metadata from YouTube search
-      try {
-        const queryResult = await ytSearch({ videoId: id });
-        if (queryResult) {
-          return res.status(200).json({
-            _id: queryResult.videoId,
-            title: queryResult.title,
-            description: queryResult.description || `YouTube video upload by ${queryResult.author.name}`,
-            videoUrl: queryResult.url,
-            thumbnailUrl: queryResult.thumbnail || queryResult.image,
-            duration: queryResult.seconds,
-            views: queryResult.views || 100000,
-            likes: Math.round((queryResult.views || 100000) * 0.06),
-            dislikes: 0,
-            isYouTubeVideo: true,
-            youtubeVideoId: queryResult.videoId,
-            youtubeChannelTitle: queryResult.author.name,
-            youtubeChannelId: queryResult.author.url.split('/').pop() || queryResult.author.name,
-            youtubeChannelAvatar: queryResult.author.image || '',
-            createdAt: queryResult.ago || 'Uploaded to YouTube'
-          });
-        }
-      } catch (ytError) {
-        // Fallback placeholder data if YouTube fetch fails
+    try {
+      const queryResult = await ytSearch({ videoId: id });
+      if (queryResult) {
         return res.status(200).json({
-          _id: id,
-          title: 'YouTube Stream',
-          description: 'A YouTube stream embedded directly into Tubee.',
-          videoUrl: `https://www.youtube.com/watch?v=${id}`,
-          thumbnailUrl: `https://img.youtube.com/vi/${id}/maxresdefault.jpg`,
-          duration: 360,
-          views: 9999,
-          likes: 232,
+          _id: queryResult.videoId,
+          title: queryResult.title,
+          description: queryResult.description || `YouTube video upload by ${queryResult.author.name}`,
+          videoUrl: queryResult.url,
+          thumbnailUrl: queryResult.thumbnail || queryResult.image,
+          duration: queryResult.seconds,
+          views: queryResult.views || 100000,
+          likes: Math.round((queryResult.views || 100000) * 0.06),
           dislikes: 0,
           isYouTubeVideo: true,
-          youtubeVideoId: id,
-          youtubeChannelTitle: 'YouTube Content Creator',
-          youtubeChannelId: 'youtube',
-          createdAt: 'Recently'
+          youtubeVideoId: queryResult.videoId,
+          youtubeChannelTitle: queryResult.author.name,
+          youtubeChannelId: queryResult.author.url.split('/').pop() || queryResult.author.name,
+          youtubeChannelAvatar: queryResult.author.image || '',
+          createdAt: queryResult.ago || 'Uploaded to YouTube'
         });
       }
+    } catch (ytError) {
+      // Fallback placeholder data if YouTube fetch fails
+      return res.status(200).json({
+        _id: id,
+        title: 'YouTube Stream',
+        description: 'A YouTube stream embedded directly into Tubee.',
+        videoUrl: `https://www.youtube.com/watch?v=${id}`,
+        thumbnailUrl: `https://img.youtube.com/vi/${id}/maxresdefault.jpg`,
+        duration: 360,
+        views: 9999,
+        likes: 232,
+        dislikes: 0,
+        isYouTubeVideo: true,
+        youtubeVideoId: id,
+        youtubeChannelTitle: 'YouTube Content Creator',
+        youtubeChannelId: 'youtube',
+        createdAt: 'Recently'
+      });
     }
   } catch (error) {
     res.status(500).json({ message: error.message });
