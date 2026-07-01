@@ -332,7 +332,35 @@ const Navbar = () => {
             </div>
           </>
         ) : (
-          !isOfflineMode && <div id="google-signin-btn" className="google-signin-btn-container"></div>
+          !isOfflineMode && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div id="google-signin-btn" className="google-signin-btn-container"></div>
+              <button 
+                onClick={async () => {
+                  try {
+                    await login('dev-bypass-token');
+                    navigate('/');
+                  } catch (err) {
+                    console.error(err);
+                  }
+                }}
+                className="btn btn-primary"
+                style={{ 
+                  padding: '6px 14px', 
+                  fontSize: '0.75rem', 
+                  backgroundColor: 'var(--coffee-700)', 
+                  borderColor: 'var(--coffee-600)',
+                  fontFamily: 'Outfit',
+                  fontWeight: 'bold',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px'
+                }}
+              >
+                <span>Dev Login</span>
+              </button>
+            </div>
+          )
         )}
       </div>
     </header>
