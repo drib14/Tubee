@@ -3,6 +3,18 @@ import Video from '../models/Video.js';
 import Channel from '../models/Channel.js';
 import User from '../models/User.js';
 
+// Helper to generate deterministic subscriber count based on channel name
+const getDeterministicSubs = (name) => {
+  if (!name) return '150K';
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const value = Math.abs(hash % 980) + 15; // 15 to 995
+  if (value > 900) return `${(value / 100).toFixed(1)}M`;
+  return `${value}K`;
+};
+
 // Search videos - merges local uploads and YouTube search results
 export const searchVideos = async (req, res) => {
   const { q } = req.query;
@@ -12,7 +24,26 @@ export const searchVideos = async (req, res) => {
   }
 
   try {
-    // 1. Search local DB
+    // 1. Search local channels
+    const localChannels = await Channel.find({
+      $or: [
+        { name: { $regex: q, $options: 'i' } },
+        { handle: { $regex: q, $options: 'i' } }
+      ]
+    });
+
+    const formattedLocalChannels = localChannels.map(ch => ({
+      _id: ch._id,
+      type: 'channel',
+      name: ch.name,
+      handle: ch.handle,
+      avatar: ch.avatar,
+      description: ch.description || 'Tubee Content Creator',
+      subscribersCount: `${ch.subscribersCount} subscribers`,
+      isYouTubeChannel: false
+    }));
+
+    // 2. Search local videos
     const localVideos = await Video.find({
       $or: [
         { title: { $regex: q, $options: 'i' } },
@@ -23,6 +54,7 @@ export const searchVideos = async (req, res) => {
 
     const formattedLocal = localVideos.map(vid => ({
       _id: vid._id,
+      type: 'video',
       title: vid.title,
       description: vid.description,
       videoUrl: vid.videoUrl,
@@ -38,32 +70,56 @@ export const searchVideos = async (req, res) => {
       createdAt: vid.createdAt
     }));
 
-    // 2. Search YouTube
+    // 3. Search YouTube
     let ytResults = [];
+    let ytChannels = [];
     try {
       const r = await ytSearch(q);
+      
+      // Parse YT Channels if present
+      if (r.channels && r.channels.length > 0) {
+        ytChannels = r.channels.slice(0, 3).map(ch => ({
+          _id: ch.id || ch.url.split('/').pop(),
+          type: 'channel',
+          name: ch.name,
+          handle: ch.url.split('/').pop() || ch.name.toLowerCase().replace(/\s+/g, ''),
+          avatar: ch.image,
+          description: `YouTube Creator with ${ch.videoCount || 10} uploads`,
+          subscribersCount: `${ch.subscribers || getDeterministicSubs(ch.name)} subscribers`,
+          isYouTubeChannel: true
+        }));
+      }
+
+      // Parse YT Videos
       ytResults = r.videos.slice(0, 15).map(v => ({
         _id: v.videoId,
+        type: 'video',
         title: v.title,
         description: `YouTube video upload by ${v.author.name}`,
         videoUrl: `https://www.youtube.com/watch?v=${v.videoId}`,
         thumbnailUrl: v.thumbnail || v.image,
         duration: v.seconds,
-        views: v.views || 1024, // Fallback default views
-        likes: Math.round((v.views || 1024) * 0.05), // Simulated likes
+        views: v.views || 1024,
+        likes: Math.round((v.views || 1024) * 0.05),
         dislikes: 0,
         isYouTubeVideo: true,
         youtubeVideoId: v.videoId,
         youtubeChannelTitle: v.author.name,
         youtubeChannelId: v.author.url.split('/').pop() || v.author.name,
+        youtubeSubscribersCount: `${getDeterministicSubs(v.author.name)} subscribers`,
         createdAt: v.ago || 'Uploaded recently'
       }));
     } catch (e) {
       console.error('YouTube search failed:', e.message);
     }
 
-    // Merge lists (local first)
-    const results = [...formattedLocal, ...ytResults];
+    // Merge lists (channels first, local items prioritized)
+    const results = [
+      ...formattedLocalChannels,
+      ...ytChannels,
+      ...formattedLocal,
+      ...ytResults
+    ];
     res.status(200).json(results);
   } catch (error) {
     res.status(500).json({ message: error.message });
