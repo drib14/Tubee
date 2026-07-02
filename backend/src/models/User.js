@@ -9,6 +9,11 @@ const userSchema = new mongoose.Schema({
   likedVideos: [{ type: String }],
   dislikedVideos: [{ type: String }],
   watchLater: [{ type: String }],
+  subscriptions: [{
+    channelId: { type: String },
+    name: { type: String },
+    avatar: { type: String }
+  }],
   history: [{
     videoId: { type: String },
     watchedAt: { type: Date, default: Date.now }

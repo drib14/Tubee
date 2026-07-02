@@ -1,5 +1,6 @@
 import https from 'https';
 import ytSearch from 'yt-search';
+import User from '../models/User.js';
 
 // Helper to fetch raw HTML from public YouTube web profiles
 const getChannelHtml = (identifier) => {
@@ -102,7 +103,50 @@ export const getTrendingChannels = async (req, res) => {
 
 // Toggle channel subscription status
 export const toggleSubscribe = async (req, res) => {
-  res.status(200).json({ subscribersCount: 154000, isSubscribed: true });
+  const { channelId } = req.params;
+  const { name, avatar } = req.body;
+
+  try {
+    const user = await User.findById(req.user._id);
+    if (!user) {
+      return res.status(401).json({ message: 'User not found' });
+    }
+
+    const cleanId = channelId.replace(/^yt-channel-/, '');
+    const idx = user.subscriptions.findIndex(sub => sub.channelId === cleanId);
+    let isSubscribed = false;
+
+    if (idx === -1) {
+      // Subscribe
+      let displayName = name;
+      let displayAvatar = avatar;
+      
+      // If client didn't supply them, fetch dynamically
+      if (!displayName || !displayAvatar) {
+        const meta = await scrapeChannelMetadata(cleanId);
+        if (meta) {
+          displayName = displayName || meta.name;
+          displayAvatar = displayAvatar || meta.avatar;
+        }
+      }
+
+      user.subscriptions.push({
+        channelId: cleanId,
+        name: displayName || cleanId,
+        avatar: displayAvatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=80&q=80'
+      });
+      isSubscribed = true;
+    } else {
+      // Unsubscribe
+      user.subscriptions.splice(idx, 1);
+      isSubscribed = false;
+    }
+
+    await user.save();
+    res.status(200).json({ subscriptions: user.subscriptions, isSubscribed });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
 };
 
 // Get single channel details (Videos, Playlists, Channels, Info)
